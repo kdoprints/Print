@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cloud Dispatch Scanner</title>
+    <title>Direct Cloud Dispatch Scanner</title>
 
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;600&display=swap" rel="stylesheet">
@@ -16,7 +16,7 @@
         h1 { text-align: center; color: #2c3e50; font-size: 24px; margin-bottom: 20px; }
 
         /* Scanner Area */
-        #reader { width: 100%; max-width: 500px; margin: 0 auto 20px auto; border-radius: 8px; overflow: hidden; }
+        #reader { width: 100%; max-width: 500px; margin: 0 auto 20px auto; border-radius: 8px; overflow: hidden; background: #000; }
         
         /* Buttons */
         .controls { text-align: center; margin-bottom: 20px; }
@@ -37,10 +37,10 @@
 <body>
 
     <div class="container">
-        <h1>☁️ Cloud Dispatch Scanner</h1>
+        <h1>☁️ Direct Dispatch Scanner</h1>
         
         <div id="reader"></div>
-        <div id="status">Ready to scan...</div>
+        <div id="status">Starting camera...</div>
 
         <div class="controls">
             <button class="btn-clear" onclick="clearTable()">🗑️ Clear Screen History</button>
@@ -92,7 +92,6 @@
             // Send data to the cloud webhook
             fetch(WEBHOOK_URL, {
                 method: "POST",
-                // This 'no-cors' mode is often required to prevent browser blocks when sending to Google Scripts from a different domain
                 mode: 'no-cors', 
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -102,6 +101,73 @@
                     status: "Dispatched"
                 })
             })
+            .then(response => {
+                // UI Feedback: Success
+                statusDiv.style.color = "#28a745"; // Green
+                statusDiv.innerText = "✅ Saved: " + orderId;
+                
+                // Play beep sound
+                new Audio('https://www.soundjay.com/buttons/sounds/button-3.mp3').play().catch(e => console.log("Audio blocked"));
+                
+                // Reset status text after 3 seconds
+                setTimeout(() => { 
+                    if(statusDiv.innerText.includes(orderId)) statusDiv.innerText = "Ready to scan..."; 
+                }, 3000);
+
+                // Add row to the visual table
+                let row = document.getElementById("tableBody").insertRow(0);
+                row.insertCell(0).innerText = new Date().toLocaleTimeString();
+                row.insertCell(1).innerText = orderId;
+                row.insertCell(2).innerText = address;
+                row.insertCell(3).innerText = "☁️ Synced";
+            })
+            .catch(error => {
+                // UI Feedback: Error
+                statusDiv.style.color = "#dc3545"; // Red
+                statusDiv.innerText = "❌ Error saving " + orderId + ". Check console.";
+                console.error("Webhook Error:", error);
+                
+                // Remove from set so the user can try scanning it again
+                scannedOrders.delete(orderId); 
+            });
+        }
+
+        function onScanFailure(error) {
+            // Ignore continuous frame errors when no QR is visible
+        }
+
+        // Initialize Direct Camera API
+        const html5QrCode = new Html5Qrcode("reader");
+
+        // Start the camera automatically
+        html5QrCode.start(
+            { facingMode: "environment" }, // Prioritize the rear camera
+            {
+                fps: 10,    
+                qrbox: { width: 250, height: 250 }  
+            },
+            onScanSuccess,
+            onScanFailure
+        ).then(() => {
+            document.getElementById("status").innerText = "Ready to scan...";
+        }).catch((err) => {
+            console.error("Error starting camera:", err);
+            document.getElementById("status").style.color = "#dc3545";
+            document.getElementById("status").innerText = "⚠️ Camera blocked or unavailable. Please check browser permissions.";
+        });
+
+        // Clear the visual table (does not delete cloud data)
+        function clearTable() {
+            if(confirm("Clear the screen history? (This does NOT delete your Google Sheets data).")) {
+                document.getElementById("tableBody").innerHTML = "";
+                scannedOrders.clear();
+                document.getElementById("status").innerText = "Ready to scan...";
+                document.getElementById("status").style.color = "#333";
+            }
+        }
+    </script>
+</body>
+</html>
             .then(response => {
                 // UI Feedback: Success
                 statusDiv.style.color = "#28a745"; // Green
