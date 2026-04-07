@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Custom PDF & Print Maker with Barcode</title>
+    <title>Shipping Label Maker with Auto QR Barcode</title>
     
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.0/JsBarcode.all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
 
@@ -24,20 +24,32 @@
             align-items: center;
             z-index: 10;
         }
-        .toolbar button, .toolbar select, .toolbar input {
+        .toolbar button, .toolbar select, .toolbar input, .toolbar textarea {
             padding: 8px 12px;
             border: 1px solid #ccc;
             border-radius: 4px;
             background: #fff;
-            cursor: pointer;
             font-size: 14px;
         }
+        .toolbar button { cursor: pointer; }
         .toolbar button:hover { background-color: #e9ecef; }
-        .toolbar input { cursor: text; min-width: 200px; }
+        
+        /* Address Input Panel */
+        .shipping-inputs {
+            display: flex;
+            gap: 10px;
+            background: #e8f4f8;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #bce0ed;
+            align-items: flex-start;
+        }
+        .shipping-inputs input { width: 150px; }
+        .shipping-inputs textarea { width: 250px; height: 40px; resize: none; }
+
         .btn-primary { background-color: #007bff !important; color: white; border-color: #007bff !important; }
         .btn-primary:hover { background-color: #0056b3 !important; }
         .btn-success { background-color: #28a745 !important; color: white; border-color: #28a745 !important; }
-        .btn-success:hover { background-color: #218838 !important; }
 
         /* Workspace & Printable Area */
         .workspace { flex-grow: 1; padding: 40px; overflow: auto; display: flex; justify-content: center; }
@@ -54,54 +66,197 @@
         .page.A6 { width: 105mm; height: 148mm; }
 
         /* Draggable Elements */
-        .text-box {
+        .draggable {
             position: absolute;
-            padding: 5px;
-            min-width: 50px;
-            min-height: 20px;
             cursor: move;
             border: 1px dashed transparent;
-            font-size: 16px;
         }
-        .text-box:focus { outline: none; border-color: #007bff; cursor: text; }
-        .text-box.selected { border-color: #007bff; }
+        .draggable.selected { border-color: #007bff; }
         
-        #barcodeContainer {
-            position: absolute;
-            top: 50px;
-            left: 50px;
-            cursor: move;
-            border: 1px dashed transparent;
-            padding: 5px;
-            background: white;
+        .text-box { padding: 5px; min-width: 50px; min-height: 20px; font-size: 16px; }
+        .text-box:focus { outline: none; border-color: #007bff; cursor: text; }
+        
+        /* Auto-Generated Address Text on Label */
+        #labelAddressText {
+            top: 20px; left: 20px;
+            white-space: pre-wrap; /* Keeps line breaks from the textarea */
+            font-size: 18px;
+            font-weight: 600;
+            padding: 10px;
         }
-        #barcodeContainer.selected { border-color: #007bff; }
+
+        #qrContainer { top: 20px; right: 20px; padding: 5px; background: white; }
 
         /* Print Media Query */
         @media print {
             body * { visibility: hidden; }
             #printArea, #printArea * { visibility: visible; }
             #printArea { position: absolute; left: 0; top: 0; box-shadow: none; }
-            .text-box, #barcodeContainer { border: none !important; }
+            .draggable { border: none !important; }
         }
     </style>
 </head>
 <body>
 
     <div class="toolbar">
-        <strong>Custom PDF & Print Maker</strong>
+        <strong>Label Maker</strong>
         
-        <button onclick="addBox()">+ Add Text Box</button>
-        
-        <select id="fontSelect" onchange="applyStyle('fontFamily', this.value)">
-            <option value="'Roboto', sans-serif">Roboto</option>
-            <option value="'Poppins', sans-serif">Poppins</option>
-            <option value="Arial, sans-serif">Arial</option>
-            <option value="'Times New Roman', serif">Times New Roman</option>
-        </select>
+        <div class="shipping-inputs">
+            <div>
+                <input type="text" id="orderIdInput" placeholder="Order ID (e.g., KOTA-101)" oninput="updateLabelData()">
+            </div>
+            <div>
+                <textarea id="addressInput" placeholder="Type full shipping address here..." oninput="updateLabelData()"></textarea>
+            </div>
+        </div>
 
-        <button onclick="applyStyle('textAlign', 'left')">Align Left</button>
-        <button onclick="applyStyle('textAlign', 'center')">Align Center</button>
+        <button onclick="addBox()">+ Add Extra Text</button>
+        
+        <select id="pageSize" onchange="changePageSize()">
+            <option value="A6">A6 Size (Standard Label)</option>
+            <option value="A5">A5 Size</option>
+            <option value="A4">A4 Size</option>
+        </select>
+        
+        <button class="btn-primary" onclick="downloadPDF()">Download PDF</button>
+        <button class="btn-success" onclick="printDoc()">Print</button>
+    </div>
+
+    <div class="workspace" id="workspace">
+        <div id="printArea" class="page A6">
+            
+            <div id="labelAddressText" class="draggable" onmousedown="dragElement(event, this)"></div>
+
+            <div id="qrContainer" class="draggable" onmousedown="dragElement(event, this)">
+                <canvas id="qr-code"></canvas>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        let selectedElement = null;
+        let qr = new QRious({
+            element: document.getElementById('qr-code'),
+            size: 120,
+            value: ''
+        });
+
+        // Function that runs automatically when typing in the Order or Address boxes
+        function updateLabelData() {
+            let orderId = document.getElementById('orderIdInput').value;
+            let address = document.getElementById('addressInput').value;
+            
+            // 1. Combine the data
+            let combinedTextForPrint = "";
+            let combinedDataForBarcode = "";
+
+            if (orderId) {
+                combinedTextForPrint += "Order ID: " + orderId + "\n";
+                combinedDataForBarcode += "Order ID: " + orderId + " | ";
+            }
+            if (address) {
+                combinedTextForPrint += address;
+                combinedDataForBarcode += "Address: " + address;
+            }
+
+            // 2. Update the text visible on the label
+            document.getElementById('labelAddressText').innerText = combinedTextForPrint;
+
+            // 3. Update the QR Code data instantly
+            if (combinedDataForBarcode.trim() !== "") {
+                qr.value = combinedDataForBarcode;
+            } else {
+                qr.value = ''; // Clears QR if boxes are empty
+            }
+        }
+
+        // --- Dragging & Selection Logic Below ---
+
+        function addBox() {
+            const box = document.createElement('div');
+            box.contentEditable = true;
+            box.className = 'draggable text-box';
+            box.innerText = 'Extra text...';
+            box.style.top = '150px';
+            box.style.left = '20px';
+            
+            box.onmousedown = (e) => {
+                selectElement(box);
+                if(e.target === box) dragElement(e, box);
+            };
+            
+            document.getElementById('printArea').appendChild(box);
+            selectElement(box);
+        }
+
+        function selectElement(el) {
+            if (selectedElement) selectedElement.classList.remove('selected');
+            selectedElement = el;
+            if(el) el.classList.add('selected');
+        }
+
+        document.getElementById('workspace').addEventListener('mousedown', function(e) {
+            if (e.target === this || e.target.id === 'printArea') {
+                selectElement(null);
+            }
+        });
+
+        function dragElement(e, elmnt) {
+            // Prevent dragging if editing a text box
+            if(document.activeElement === elmnt && elmnt.contentEditable === "true") return;
+            
+            e.preventDefault();
+            selectElement(elmnt);
+            let pos1 = 0, pos2 = 0, pos3 = e.clientX, pos4 = e.clientY;
+
+            document.onmouseup = closeDragElement;
+            document.onmousemove = elementDrag;
+
+            function elementDrag(e) {
+                e.preventDefault();
+                pos1 = pos3 - e.clientX;
+                pos2 = pos4 - e.clientY;
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
+                elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
+            }
+
+            function closeDragElement() {
+                document.onmouseup = null;
+                document.onmousemove = null;
+            }
+        }
+
+        function changePageSize() {
+            const area = document.getElementById('printArea');
+            area.className = 'page ' + document.getElementById('pageSize').value;
+        }
+
+        function printDoc() {
+            selectElement(null);
+            window.print();
+        }
+
+        function downloadPDF() {
+            selectElement(null);
+            const element = document.getElementById('printArea');
+            const pageSize = document.getElementById('pageSize').value.toLowerCase();
+            
+            const opt = {
+                margin:       0,
+                filename:     'shipping-label.pdf',
+                image:        { type: 'jpeg', quality: 1 },
+                html2canvas:  { scale: 2, useCORS: true },
+                jsPDF:        { unit: 'mm', format: pageSize, orientation: 'portrait' }
+            };
+
+            html2pdf().set(opt).from(element).save();
+        }
+    </script>
+</body>
+</html>
         <button onclick="applyStyle('textAlign', 'right')">Align Right</button>
         
         <button onclick="changeSize(2)">A+</button>
